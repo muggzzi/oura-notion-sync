@@ -28,6 +28,7 @@ Notes on choices made here:
 
 import os
 import sys
+import time
 import datetime as dt
 import requests
 
@@ -182,11 +183,26 @@ def fetch_range(start_date, end_date):
 # -----------------------------------------------------------------------------
 # Notion writing (find -> update or create)
 # -----------------------------------------------------------------------------
+def notion_request(method, url, payload=None, max_retries=6):
+    """Notion call with retry/backoff so large backfills don't fail on rate limits."""
+    for attempt in range(max_retries):
+        r = requests.request(method, url, headers=NOTION_HEADERS, json=payload, timeout=30)
+        if r.status_code == 429:  # rate limited
+            wait = float(r.headers.get("Retry-After", 1)) + 0.5
+            time.sleep(wait)
+            continue
+        if r.status_code >= 500:  # transient server error
+            time.sleep(1.5 * (attempt + 1))
+            continue
+        r.raise_for_status()
+        return r
+    r.raise_for_status()
+    return r
+
 def notion_find_page(day):
     url = f"{NOTION_BASE}/databases/{NOTION_DB_ID}/query"
     payload = {"filter": {"property": "Date", "date": {"equals": day}}, "page_size": 1}
-    r = requests.post(url, headers=NOTION_HEADERS, json=payload, timeout=30)
-    r.raise_for_status()
+    r = notion_request("POST", url, payload)
     results = r.json().get("results", [])
     return results[0]["id"] if results else None
 
@@ -237,14 +253,13 @@ def upsert(record):
     page_id = notion_find_page(record["day"])
     if page_id:
         url = f"{NOTION_BASE}/pages/{page_id}"
-        r = requests.patch(url, headers=NOTION_HEADERS, json={"properties": props}, timeout=30)
+        notion_request("PATCH", url, {"properties": props})
         action = "updated"
     else:
         url = f"{NOTION_BASE}/pages"
         payload = {"parent": {"database_id": NOTION_DB_ID}, "properties": props}
-        r = requests.post(url, headers=NOTION_HEADERS, json=payload, timeout=30)
+        notion_request("POST", url, payload)
         action = "created"
-    r.raise_for_status()
     return action
 
 # -----------------------------------------------------------------------------
@@ -265,12 +280,12 @@ def main():
     for day in sorted(records):
         try:
             action = upsert(records[day])
-            counts = {"created": 1, "updated": 1}
             if action == "created":
                 created += 1
             else:
                 updated += 1
             print(f"  {day}: {action}")
+            time.sleep(0.34)  # stay under Notion's ~3 requests/sec
         except requests.HTTPError as e:
             print(f"  {day}: ERROR {e} -> {getattr(e.response,'text','')[:300]}")
 
