@@ -2,10 +2,13 @@ name: Oura to Notion sync
 
 on:
   schedule:
-    # 15:00 UTC = 9:00 AM in Costa Rica (UTC-6, no daylight saving).
-    # The 7-day lookback means a late morning sync is still captured next run.
     - cron: "0 15 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      lookback_days:
+        description: "Days back to sync (normal is 7; use a big number once to backfill history)"
+        required: false
+        default: "7"
 
 jobs:
   sync:
@@ -27,5 +30,5 @@ jobs:
           OURA_TOKEN: ${{ secrets.OURA_TOKEN }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
-          LOOKBACK_DAYS: "7"
+          LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || '7' }}
         run: python oura_to_notion.py
