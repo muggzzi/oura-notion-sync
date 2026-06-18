@@ -1,0 +1,31 @@
+name: Oura to Notion sync
+
+on:
+  schedule:
+    # 15:00 UTC = 9:00 AM in Costa Rica (UTC-6, no daylight saving).
+    # The 7-day lookback means a late morning sync is still captured next run.
+    - cron: "0 15 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run sync
+        env:
+          OURA_TOKEN: ${{ secrets.OURA_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
+          LOOKBACK_DAYS: "7"
+        run: python oura_to_notion.py
