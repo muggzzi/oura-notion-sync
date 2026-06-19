@@ -1,14 +1,20 @@
 name: Oura to Notion sync
 
+# Runs daily. Can also be run by hand from the Actions tab, where you can set
+# how many days back to pull, or paste a one-time Dropbox authorization code.
 on:
   schedule:
-    - cron: "0 15 * * *"
+    - cron: "0 15 * * *"   # 15:00 UTC = 9:00 AM Costa Rica
   workflow_dispatch:
     inputs:
       lookback_days:
-        description: "Days back to sync (normal is 7; use a big number once to backfill history)"
+        description: "Days back to sync to Notion (normal is 7; big number = backfill)"
         required: false
         default: "7"
+      dropbox_auth_code:
+        description: "One-time only: paste a Dropbox authorization code to get a refresh token"
+        required: false
+        default: ""
 
 jobs:
   sync:
@@ -31,4 +37,8 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
           LOOKBACK_DAYS: ${{ github.event.inputs.lookback_days || '7' }}
+          DROPBOX_AUTH_CODE: ${{ github.event.inputs.dropbox_auth_code || '' }}
+          DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+          DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+          DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
         run: python oura_to_notion.py
