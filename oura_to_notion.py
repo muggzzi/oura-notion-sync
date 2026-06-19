@@ -2,50 +2,57 @@
 """
 oura_to_notion.py
 -----------------
-Pulls Oura Ring data from the Oura API (v2) and writes one row per night into a
-Notion database. Runs on a rolling lookback window and UPSERTS (updates an
-existing row for a date, or creates it if missing), so if you forget to sync
-your ring for a day or two, the gap quietly fills in on the next run.
+Pulls Oura Ring data from the Oura API (v2) and:
+  1. Writes one row per night into a Notion database (rolling lookback + upsert).
+  2. Exports your full history as a single CSV to Dropbox, so it can be read
+     and analyzed on demand without any manual uploads.
 
-Designed to run unattended on a schedule (see .github/workflows/oura-sync.yml),
-but you can also run it by hand:  python oura_to_notion.py
+Runs unattended on a schedule (see .github/workflows/oura-sync.yml); can also be
+run by hand.
 
-Environment variables (set these as secrets, never hard-code them):
-  OURA_TOKEN     - Oura Personal Access Token  (cloud.ouraring.com/personal-access-tokens)
-  NOTION_TOKEN   - Notion internal integration token (notion.so/my-integrations)
-  NOTION_DB_ID   - The ID of your Notion "Oura" database
-  LOOKBACK_DAYS  - optional, how many days back to refresh each run (default 7)
+Environment variables (set as secrets):
+  OURA_TOKEN              Oura Personal Access Token
+  NOTION_TOKEN           Notion internal integration token
+  NOTION_DB_ID           ID of the Notion "Oura" database
+  LOOKBACK_DAYS          days back to refresh in Notion each run (default 7)
+  CSV_DAYS               days of history to write to the Dropbox CSV (default 400)
+  DROPBOX_APP_KEY        Dropbox app key
+  DROPBOX_APP_SECRET     Dropbox app secret
+  DROPBOX_REFRESH_TOKEN  Dropbox OAuth refresh token (for unattended uploads)
+  DROPBOX_CSV_PATH       path in Dropbox for the CSV (default /oura_history.csv)
+  DROPBOX_AUTH_CODE      one-time use: exchange an auth code for a refresh token
 
-Notes on choices made here:
-  * Temperature is stored as a deviation in Fahrenheit (Oura reports it in Celsius;
-    a delta of X C = X * 1.8 F).  This matches your preference for Fahrenheit.
-  * "Resting HR" uses Oura's lowest_heart_rate (what we've been calling your low HR).
-  * Bedtime/Wake are stored as local clock times (HH:MM) from bedtime_start/end --
-    the real clock bedtime the flattened export couldn't give us.
-  * Only the main overnight sleep (type "long_sleep", or the longest period that
-    day) is recorded, so naps don't overwrite the night.
+One-time Dropbox setup helper:
+  Run the workflow with the "dropbox_auth_code" input set to the authorization
+  code from Dropbox. The script prints a refresh token to save as a secret.
 """
 
 import os
 import sys
 import time
+import json
 import datetime as dt
+import io
+import csv
 import requests
 
-# ----------------------------------------------------------------------------- 
+# -----------------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------------
 OURA_TOKEN = os.environ.get("OURA_TOKEN", "").strip()
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
 NOTION_DB_ID = os.environ.get("NOTION_DB_ID", "").strip()
 LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "7"))
+CSV_DAYS = int(os.environ.get("CSV_DAYS", "400"))
+
+DBX_KEY = os.environ.get("DROPBOX_APP_KEY", "").strip()
+DBX_SECRET = os.environ.get("DROPBOX_APP_SECRET", "").strip()
+DBX_REFRESH = os.environ.get("DROPBOX_REFRESH_TOKEN", "").strip()
+DBX_CSV_PATH = os.environ.get("DROPBOX_CSV_PATH", "/oura_history.csv").strip()
 
 OURA_BASE = "https://api.ouraring.com/v2/usercollection"
 NOTION_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
-
-if not (OURA_TOKEN and NOTION_TOKEN and NOTION_DB_ID):
-    sys.exit("Missing one of OURA_TOKEN / NOTION_TOKEN / NOTION_DB_ID.")
 
 OURA_HEADERS = {"Authorization": f"Bearer {OURA_TOKEN}"}
 NOTION_HEADERS = {
@@ -64,7 +71,6 @@ def secs_to_hours(s):
     return round(s / 3600.0, 2) if isinstance(s, (int, float)) else None
 
 def c_dev_to_f(c):
-    # temperature DEVIATION conversion: delta degrees C -> delta degrees F
     return round(c * 1.8, 2) if isinstance(c, (int, float)) else None
 
 def local_hhmm(iso_ts):
@@ -76,7 +82,7 @@ def local_hhmm(iso_ts):
         return None
 
 # -----------------------------------------------------------------------------
-# Oura fetching (handles pagination via next_token)
+# Oura fetching
 # -----------------------------------------------------------------------------
 def oura_get(path, start_date, end_date):
     out = []
@@ -94,7 +100,6 @@ def oura_get(path, start_date, end_date):
     return out
 
 def pick_main_sleep(periods_for_day):
-    """Choose the main overnight sleep, ignoring naps."""
     longs = [p for p in periods_for_day if p.get("type") == "long_sleep"]
     pool = longs if longs else periods_for_day
     if not pool:
@@ -103,8 +108,6 @@ def pick_main_sleep(periods_for_day):
 
 def fetch_range(start_date, end_date):
     """Return {day: {merged metrics}} for the date range."""
-    # Detailed /sleep filters by bedtime_start, so widen the window one day back
-    # and re-key by the returned 'day' field to avoid missing overnight sleeps.
     sleep_start = (dt.date.fromisoformat(start_date) - dt.timedelta(days=1)).isoformat()
 
     detailed = oura_get("sleep", sleep_start, end_date)
@@ -115,9 +118,8 @@ def fetch_range(start_date, end_date):
     try:
         tags = oura_get("enhanced_tag", start_date, end_date)
     except requests.HTTPError:
-        tags = []  # tags are optional; never let them break the run
+        tags = []
 
-    # group detailed sleep periods by day, then pick the main one
     by_day_periods = {}
     for p in detailed:
         by_day_periods.setdefault(p.get("day"), []).append(p)
@@ -167,7 +169,6 @@ def fetch_range(start_date, end_date):
         r["recovery_high_min"] = secs_to_min(d.get("recovery_high"))
         r["stress_summary"] = d.get("day_summary")
 
-    # collect tag comments per day
     notes_by_day = {}
     for t in tags:
         day = t.get("start_day") or t.get("day")
@@ -177,21 +178,19 @@ def fetch_range(start_date, end_date):
     for day, items in notes_by_day.items():
         rec(day)["notes"] = "; ".join(items)[:1900]
 
-    # keep only days inside the requested window
     return {d: v for d, v in records.items() if start_date <= d <= end_date}
 
 # -----------------------------------------------------------------------------
-# Notion writing (find -> update or create)
+# Notion writing
 # -----------------------------------------------------------------------------
 def notion_request(method, url, payload=None, max_retries=6):
-    """Notion call with retry/backoff so large backfills don't fail on rate limits."""
     for attempt in range(max_retries):
         r = requests.request(method, url, headers=NOTION_HEADERS, json=payload, timeout=30)
-        if r.status_code == 429:  # rate limited
+        if r.status_code == 429:
             wait = float(r.headers.get("Retry-After", 1)) + 0.5
             time.sleep(wait)
             continue
-        if r.status_code >= 500:  # transient server error
+        if r.status_code >= 500:
             time.sleep(1.5 * (attempt + 1))
             continue
         r.raise_for_status()
@@ -216,8 +215,6 @@ def sel(v):
     return {"select": {"name": str(v)}} if v not in (None, "") else None
 
 def build_properties(r):
-    """Map a merged record to Notion properties. None values are dropped so we
-    never overwrite good data with blanks on a partial pull."""
     day = r["day"]
     props = {
         "Name": {"title": [{"text": {"content": day}}]},
@@ -252,44 +249,124 @@ def upsert(record):
     props = build_properties(record)
     page_id = notion_find_page(record["day"])
     if page_id:
-        url = f"{NOTION_BASE}/pages/{page_id}"
-        notion_request("PATCH", url, {"properties": props})
-        action = "updated"
-    else:
-        url = f"{NOTION_BASE}/pages"
-        payload = {"parent": {"database_id": NOTION_DB_ID}, "properties": props}
-        notion_request("POST", url, payload)
-        action = "created"
-    return action
+        notion_request("PATCH", f"{NOTION_BASE}/pages/{page_id}", {"properties": props})
+        return "updated"
+    payload = {"parent": {"database_id": NOTION_DB_ID}, "properties": props}
+    notion_request("POST", f"{NOTION_BASE}/pages", payload)
+    return "created"
+
+# -----------------------------------------------------------------------------
+# Dropbox CSV export
+# -----------------------------------------------------------------------------
+CSV_COLUMNS = [
+    "date", "total_sleep_h", "time_in_bed_h", "efficiency", "deep_min", "rem_min",
+    "light_min", "latency_min", "avg_hrv", "hrv_balance", "resting_hr", "avg_hr",
+    "resp_rate", "temp_dev_f", "spo2", "sleep_score", "readiness_score",
+    "bedtime", "wake", "stress_high_min", "recovery_high_min", "stress_summary", "notes",
+]
+
+def records_to_csv(records):
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=CSV_COLUMNS)
+    w.writeheader()
+    for day in sorted(records):
+        r = records[day]
+        row = {c: r.get(c) for c in CSV_COLUMNS}
+        row["date"] = day
+        w.writerow(row)
+    return out.getvalue()
+
+def dropbox_access_token():
+    r = requests.post(
+        "https://api.dropbox.com/oauth2/token",
+        data={"grant_type": "refresh_token", "refresh_token": DBX_REFRESH},
+        auth=(DBX_KEY, DBX_SECRET), timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+def dropbox_upload(token, path, content_bytes):
+    r = requests.post(
+        "https://content.dropboxapi.com/2/files/upload",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Dropbox-API-Arg": json.dumps({"path": path, "mode": "overwrite", "mute": True}),
+            "Content-Type": "application/octet-stream",
+        },
+        data=content_bytes, timeout=60,
+    )
+    r.raise_for_status()
+
+def export_csv_to_dropbox(records):
+    if not (DBX_KEY and DBX_SECRET and DBX_REFRESH):
+        print("Dropbox not configured; skipping CSV export.")
+        return
+    try:
+        token = dropbox_access_token()
+        csv_text = records_to_csv(records)
+        dropbox_upload(token, DBX_CSV_PATH, csv_text.encode("utf-8"))
+        print(f"CSV exported to Dropbox at {DBX_CSV_PATH} ({len(records)} nights).")
+    except Exception as e:
+        print(f"Dropbox export failed (sync still OK): {e}")
+
+def dropbox_auth_exchange(code):
+    r = requests.post(
+        "https://api.dropbox.com/oauth2/token",
+        data={"code": code, "grant_type": "authorization_code"},
+        auth=(DBX_KEY, DBX_SECRET), timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
 
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 def main():
-    end = dt.date.today()
-    start = end - dt.timedelta(days=LOOKBACK_DAYS)
-    start_s, end_s = start.isoformat(), end.isoformat()
-    print(f"Syncing Oura -> Notion for {start_s} .. {end_s}")
-
-    records = fetch_range(start_s, end_s)
-    if not records:
-        print("No Oura data in window yet (have you opened the Oura app to sync?).")
+    # One-time helper: exchange an auth code for a refresh token, then exit.
+    code = os.environ.get("DROPBOX_AUTH_CODE", "").strip()
+    if code:
+        if not (DBX_KEY and DBX_SECRET):
+            sys.exit("Set DROPBOX_APP_KEY and DROPBOX_APP_SECRET secrets first.")
+        data = dropbox_auth_exchange(code)
+        rt = data.get("refresh_token", "(no refresh_token returned)")
+        print("==== SAVE THIS VALUE AS THE DROPBOX_REFRESH_TOKEN SECRET ====")
+        print(rt)
+        print("==== then delete this workflow run from the Actions tab ====")
         return
 
+    if not (OURA_TOKEN and NOTION_TOKEN and NOTION_DB_ID):
+        sys.exit("Missing one of OURA_TOKEN / NOTION_TOKEN / NOTION_DB_ID.")
+
+    end = dt.date.today()
+    lookback_start = end - dt.timedelta(days=LOOKBACK_DAYS)
+    csv_start = end - dt.timedelta(days=CSV_DAYS)
+    fetch_start = min(lookback_start, csv_start)
+    print(f"Fetching Oura data {fetch_start} .. {end}")
+
+    records = fetch_range(fetch_start.isoformat(), end.isoformat())
+    if not records:
+        print("No Oura data in window yet (open the Oura app to sync the ring?).")
+        return
+
+    # Notion: upsert only the recent lookback window (keeps daily writes light).
+    lb = lookback_start.isoformat()
+    to_upsert = {d: v for d, v in records.items() if d >= lb}
     created = updated = 0
-    for day in sorted(records):
+    for day in sorted(to_upsert):
         try:
-            action = upsert(records[day])
+            action = upsert(to_upsert[day])
             if action == "created":
                 created += 1
             else:
                 updated += 1
-            print(f"  {day}: {action}")
-            time.sleep(0.34)  # stay under Notion's ~3 requests/sec
+            print(f"  Notion {day}: {action}")
+            time.sleep(0.34)
         except requests.HTTPError as e:
-            print(f"  {day}: ERROR {e} -> {getattr(e.response,'text','')[:300]}")
+            print(f"  Notion {day}: ERROR {e} -> {getattr(e.response,'text','')[:300]}")
+    print(f"Notion done. {created} created, {updated} updated.")
 
-    print(f"Done. {created} created, {updated} updated.")
+    # Dropbox: write the full history CSV for on-demand analysis.
+    export_csv_to_dropbox(records)
 
 if __name__ == "__main__":
     main()
