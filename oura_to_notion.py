@@ -368,5 +368,12 @@ def main():
     # Dropbox: write the full history CSV for on-demand analysis.
     export_csv_to_dropbox(records)
 
+    # Smartsheet: push Oura (and later weather) into the live Daily Metrics sheet.
+    try:
+        import smartsheet_sync
+        smartsheet_sync.sync(records)
+    except Exception as e:
+        print(f"Smartsheet sync failed (rest of sync OK): {e}")
+
 if __name__ == "__main__":
     main()
