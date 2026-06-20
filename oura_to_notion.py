@@ -375,5 +375,18 @@ def main():
     except Exception as e:
         print(f"Smartsheet sync failed (rest of sync OK): {e}")
 
+    # GitHub Pages: write the CSV next to the dashboard (committed by the workflow).
+    docs_csv = os.environ.get("DOCS_CSV_PATH", "").strip()
+    if docs_csv:
+        try:
+            d = os.path.dirname(docs_csv)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(docs_csv, "w", encoding="utf-8") as f:
+                f.write(records_to_csv(records))
+            print(f"Wrote {docs_csv} for GitHub Pages.")
+        except Exception as e:
+            print(f"Pages CSV write failed (rest OK): {e}")
+
 if __name__ == "__main__":
     main()
