@@ -24,8 +24,8 @@ import os
 import datetime as dt
 import requests
 
-LAT = float(os.environ.get("WEATHER_LAT", "9.24"))     # Escaleras / Dominicalito
-LON = float(os.environ.get("WEATHER_LON", "-83.86"))
+LAT = float(os.environ.get("WEATHER_LAT", "9.2236775"))    # Terry's exact location
+LON = float(os.environ.get("WEATHER_LON", "-83.8145041"))
 TZ = os.environ.get("WEATHER_TZ", "America/Costa_Rica")
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
