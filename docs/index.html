@@ -284,6 +284,12 @@ const METRICS = {
   w_rain_in:{label:'Rainfall',unit:'in',better:'flat'},
   w_sunshine_h:{label:'Sunshine',unit:'h',better:'flat'},
   w_temp_f:{label:'Outdoor temp',unit:'°F',better:'flat'},
+  c_mood:{label:'Mood',unit:'',better:'up'},
+  c_energy:{label:'Energy',unit:'',better:'up'},
+  c_comfort:{label:'Comfort',unit:'',better:'up'},
+  c_hands:{label:'Hands',unit:'',better:'up'},
+  c_bodycalm:{label:'Body calm',unit:'',better:'up'},
+  c_indoor_humidity:{label:'Indoor humidity',unit:'%',better:'flat'},
 };
 const PRESETS = {
   'Recovery & overall':['readiness_score','sleep_score','avg_hrv','resting_hr'],
@@ -292,6 +298,7 @@ const PRESETS = {
   'Therapy & nervous system':['avg_hrv','hrv_balance','deep_min','stress_high_min'],
   'Daytime load':['stress_high_min','recovery_high_min'],
   'Weather & environment':['w_pressure','w_pressure_delta','w_humidity','w_rain_in','w_sunshine_h','w_temp_f'],
+  'Daily check-in':['c_mood','c_energy','c_comfort','c_hands','c_bodycalm','c_indoor_humidity'],
 };
 
 let ROWS=[], selected=PRESETS['Recovery & overall'].slice(), rangeDays='all',
