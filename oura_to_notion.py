@@ -263,6 +263,7 @@ CSV_COLUMNS = [
     "light_min", "latency_min", "avg_hrv", "hrv_balance", "resting_hr", "avg_hr",
     "resp_rate", "temp_dev_f", "spo2", "sleep_score", "readiness_score",
     "bedtime", "wake", "stress_high_min", "recovery_high_min", "stress_summary", "notes",
+    "w_pressure", "w_pressure_delta", "w_humidity", "w_rain_in", "w_sunshine_h", "w_temp_f",
 ]
 
 def records_to_csv(records):
@@ -347,6 +348,19 @@ def main():
     if not records:
         print("No Oura data in window yet (open the Oura app to sync the ring?).")
         return
+
+    # Weather: pull environmental data for the actual data range and merge in.
+    try:
+        import weather as weather_mod
+        wx = weather_mod.get_weather(min(records), end.isoformat())
+        merged_days = 0
+        for day, wrec in wx.items():
+            if day in records:
+                records[day].update({k: v for k, v in wrec.items() if v is not None})
+                merged_days += 1
+        print(f"Weather merged into {merged_days} days.")
+    except Exception as e:
+        print(f"Weather fetch failed (rest of sync OK): {e}")
 
     # Notion: upsert only the recent lookback window (keeps daily writes light).
     lb = lookback_start.isoformat()
