@@ -30,6 +30,7 @@ import requests
 SS_TOKEN = os.environ.get("SMARTSHEET_TOKEN", "").strip()
 SS_SHEET_ID = os.environ.get("SMARTSHEET_METRICS_SHEET_ID", "").strip()
 SS_REFRESH_DAYS = int(os.environ.get("SMARTSHEET_REFRESH_DAYS", "14"))
+SS_CHECKIN_ID = os.environ.get("SMARTSHEET_CHECKIN_SHEET_ID", "244139844128644").strip()
 SS_BASE = "https://api.smartsheet.com/2.0"
 
 DATE_TITLE = "Date"
@@ -133,3 +134,42 @@ def sync(records):
     added = _batch(adds, "POST") if adds else 0
     updated = _batch(updates, "PUT") if updates else 0
     print(f"Smartsheet Daily Metrics: {added} added, {updated} updated.")
+
+
+# Daily Check-in form sheet: column title -> key in the daily record dict
+CHECKIN_MAP = {
+    "Mood": "c_mood",
+    "Energy": "c_energy",
+    "Comfort": "c_comfort",
+    "Hands": "c_hands",
+    "Body calm": "c_bodycalm",
+    "Indoor humidity %": "c_indoor_humidity",
+}
+
+
+def read_checkins():
+    """Return {day: {c_*}} from the Daily Check-in form sheet (matched by Date)."""
+    if not (SS_TOKEN and SS_CHECKIN_ID):
+        return {}
+    try:
+        sheet = _request("GET", f"/sheets/{SS_CHECKIN_ID}").json()
+    except Exception as e:
+        print(f"Check-in read failed (rest of sync OK): {e}")
+        return {}
+    title = {c["id"]: c["title"] for c in sheet.get("columns", [])}
+    out = {}
+    for row in sheet.get("rows", []):
+        day, vals = None, {}
+        for cell in row.get("cells", []):
+            t = title.get(cell.get("columnId"))
+            v = cell.get("value")
+            if t == "Date" and v:
+                day = str(v)[:10]
+            elif t in CHECKIN_MAP and v not in (None, ""):
+                try:
+                    vals[CHECKIN_MAP[t]] = float(v)
+                except (TypeError, ValueError):
+                    pass
+        if day and vals:
+            out[day] = vals
+    return out

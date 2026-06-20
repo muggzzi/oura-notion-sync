@@ -264,6 +264,7 @@ CSV_COLUMNS = [
     "resp_rate", "temp_dev_f", "spo2", "sleep_score", "readiness_score",
     "bedtime", "wake", "stress_high_min", "recovery_high_min", "stress_summary", "notes",
     "w_pressure", "w_pressure_delta", "w_humidity", "w_rain_in", "w_sunshine_h", "w_temp_f",
+    "c_mood", "c_energy", "c_comfort", "c_hands", "c_bodycalm", "c_indoor_humidity",
 ]
 
 def records_to_csv(records):
@@ -361,6 +362,20 @@ def main():
         print(f"Weather merged into {merged_days} days.")
     except Exception as e:
         print(f"Weather fetch failed (rest of sync OK): {e}")
+
+    # Daily check-in: pull the subjective ratings from the Smartsheet form.
+    try:
+        import smartsheet_sync
+        chk = smartsheet_sync.read_checkins()
+        merged = 0
+        for day, cvals in chk.items():
+            if day in records:
+                records[day].update(cvals)
+                merged += 1
+        if chk:
+            print(f"Check-ins merged into {merged} day(s).")
+    except Exception as e:
+        print(f"Check-in fetch failed (rest of sync OK): {e}")
 
     # Notion: upsert only the recent lookback window (keeps daily writes light).
     lb = lookback_start.isoformat()
