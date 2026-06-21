@@ -264,7 +264,7 @@ CSV_COLUMNS = [
     "resp_rate", "temp_dev_f", "spo2", "sleep_score", "readiness_score",
     "bedtime", "wake", "stress_high_min", "recovery_high_min", "stress_summary", "notes",
     "w_pressure", "w_pressure_delta", "w_humidity", "w_rain_in", "w_sunshine_h", "w_temp_f",
-    "c_mood", "c_energy", "c_comfort", "c_hands", "c_bodycalm", "c_indoor_humidity",
+    "c_mood", "c_energy", "c_comfort", "c_hands", "c_bodycalm", "c_calm", "c_clarity", "c_indoor_humidity",
 ]
 
 def records_to_csv(records):

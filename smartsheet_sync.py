@@ -143,6 +143,8 @@ CHECKIN_MAP = {
     "Comfort": "c_comfort",
     "Hands": "c_hands",
     "Body calm": "c_bodycalm",
+    "Calm": "c_calm",
+    "Clarity": "c_clarity",
     "Indoor humidity %": "c_indoor_humidity",
 }
 
