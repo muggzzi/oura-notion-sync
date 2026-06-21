@@ -289,6 +289,8 @@ const METRICS = {
   c_comfort:{label:'Comfort',unit:'',better:'up'},
   c_hands:{label:'Hands',unit:'',better:'up'},
   c_bodycalm:{label:'Body calm',unit:'',better:'up'},
+  c_calm:{label:'Calm',unit:'',better:'up'},
+  c_clarity:{label:'Clarity',unit:'',better:'up'},
   c_indoor_humidity:{label:'Indoor humidity',unit:'%',better:'flat'},
 };
 const PRESETS = {
@@ -298,7 +300,7 @@ const PRESETS = {
   'Therapy & nervous system':['avg_hrv','hrv_balance','deep_min','stress_high_min'],
   'Daytime load':['stress_high_min','recovery_high_min'],
   'Weather & environment':['w_pressure','w_pressure_delta','w_humidity','w_rain_in','w_sunshine_h','w_temp_f'],
-  'Daily check-in':['c_mood','c_energy','c_comfort','c_hands','c_bodycalm','c_indoor_humidity'],
+  'Daily check-in':['c_mood','c_energy','c_comfort','c_hands','c_bodycalm','c_calm','c_clarity','c_indoor_humidity'],
 };
 
 let ROWS=[], selected=PRESETS['Recovery & overall'].slice(), rangeDays='all',
